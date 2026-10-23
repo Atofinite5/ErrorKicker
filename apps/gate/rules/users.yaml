@@ -1,0 +1,30 @@
+# Stage B business rules for the `users` table.
+version: 1
+rules:
+  - id: B4_AGE_RANGE
+    severity: high
+    check: range
+    field: age
+    min: 0
+    max: 150
+    message: "Age {value} is impossible — expected 0–150."
+
+  - id: B5_SIGNUP_NOT_FUTURE
+    severity: high
+    check: not_future
+    field: signupAt
+    message: "Signup time {value} is in the future."
+
+  - id: B6_PHONE_FORMAT
+    severity: medium
+    check: regex
+    field: phone
+    pattern: "^\\+?[0-9]{7,15}$"
+    message: "Phone {value} is not a valid international number."
+
+  - id: B7_NAME_NO_DIGITS
+    severity: medium
+    check: regex
+    field: name
+    pattern: "^[^0-9]*$"
+    message: "Name {value} contains digits — probable test or garbage data."

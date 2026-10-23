@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# Secrets and local env (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Logs and OS
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+.cursor/
+
+# Test / coverage
+coverage/
+.nyc_output/

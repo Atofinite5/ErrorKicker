@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+pre.record {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

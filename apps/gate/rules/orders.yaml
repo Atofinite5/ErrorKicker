@@ -1,0 +1,36 @@
+# Stage B business rules for the `orders` table.
+# Rules are data, not code: edit this file and POST /rules/reload to change
+# the gate's behaviour without redeploying. First failing rule kicks the record.
+version: 1
+rules:
+  - id: B4_TOTAL_RANGE
+    severity: critical
+    check: range
+    field: total
+    min: 0
+    max: 1000000
+    message: "Order total {value} is outside the valid range {min}–{max}."
+
+  - id: B5_TOTAL_MATCHES_LINES
+    severity: high
+    check: expression
+    expr: "abs(total - sum(items, qty * price)) < 0.01"
+    message: "Order total {total} does not match the sum of its line items."
+
+  - id: B6_USER_EXISTS
+    severity: high
+    check: exists
+    field: userId
+    table: users
+    message: "Customer {value} does not exist — the order would be orphaned."
+
+  - id: B7_QTY_RANGE
+    severity: high
+    check: each
+    field: items
+    rule:
+      check: range
+      field: qty
+      min: 1
+      max: 1000
+      message: "Line-item quantity {value} is outside the valid range 1–1000."
