@@ -4,6 +4,7 @@ import { config } from "./config.ts";
 import { executor, pool } from "./db.ts";
 import { postNotifyEvent, shouldNotify, type NotifyEvent } from "./notify.ts";
 import { allocateSequence } from "./pause.ts";
+import { enqueueOutbox } from "./queue.ts";
 
 // ---------------------------------------------------------------------------
 // Durable write operations + transactional outbox (PRD Arch §4/§6/§9).
@@ -12,7 +13,7 @@ import { allocateSequence } from "./pause.ts";
 // outcome (COMMITTED / QUARANTINED / QUEUED) is recorded in the same
 // Postgres transaction as the effect itself. Outbox rows are written in
 // that same transaction; the v1 publisher below is a stub that marks rows
-// published (BullMQ delivery is Pass 2 / MVP D — delivery is at-least-once
+// published after BullMQ delivery (or HTTP fallback). Delivery is at-least-once
 // and consumers must be idempotent, Arch §9).
 // ---------------------------------------------------------------------------
 
@@ -181,6 +182,11 @@ export async function publishPendingOutbox(limit = 100): Promise<number> {
       Boolean(config.n8nWebhookUrl) && shouldNotify(payload?.status, config.n8nNotifyStatuses);
     if (!wantsN8n) {
       await markOutboxPublished(row.event_id);
+      done++;
+      continue;
+    }
+    const queued = await enqueueOutbox(row.event_id, payload);
+    if (queued) {
       done++;
       continue;
     }

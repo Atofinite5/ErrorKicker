@@ -2,6 +2,7 @@
 // Run: npm run smoke
 import assert from "node:assert";
 import { findSuspiciousPattern, llmSafeRecord } from "./anomaly.ts";
+import { pathScope } from "./auth.ts";
 import { contentHash, decideIdempotency, requestHash } from "./dedup.ts";
 import { addedFields, suggestFix, nearestField } from "./fixes.ts";
 import { versionConflict } from "./incidents.ts";
@@ -227,10 +228,31 @@ t("committed and queued payloads stay ids-only", () => {
   assert.strictEqual(queued.pipelineId, "default");
 });
 
+console.log("auth scopes");
+t("write / review / operate / health", () => {
+  assert.strictEqual(pathScope("POST", "/v1/writes"), "write");
+  assert.strictEqual(pathScope("GET", "/health"), "public");
+  assert.strictEqual(pathScope("POST", "/v1/incidents/x/approve"), "review");
+  assert.strictEqual(pathScope("POST", "/v1/pipelines/x/abort"), "operate");
+  assert.strictEqual(pathScope("GET", "/v1/incidents"), "read");
+});
+
 console.log("PRD LLM payload policy (§15)");
 t("llmSafeRecord strips id + *Id fields, keeps the rest", () => {
   const safe = llmSafeRecord({ id: "o1", userId: "u1", total: 499, currency: "INR" });
   assert.deepStrictEqual(safe, { total: 499, currency: "INR" });
+});
+t("llmSafeRecord drops secrets and redacts emails", () => {
+  const safe = llmSafeRecord({
+    total: 10,
+    email: "ada@example.com",
+    password: "hunter2",
+    note: "contact bob@x.com",
+  });
+  assert.strictEqual(safe.password, undefined);
+  assert.strictEqual(safe.email, undefined);
+  assert.strictEqual(safe.note, "contact [redacted]");
+  assert.strictEqual(safe.total, 10);
 });
 
 console.log(`\n${passed} logic checks passed.`);

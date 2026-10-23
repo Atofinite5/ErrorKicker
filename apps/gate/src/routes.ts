@@ -47,6 +47,7 @@ import {
   listPipelines,
 } from "./pause.ts";
 import { isRedisUp } from "./redis.ts";
+import { assertScope, pathScope, principalFrom } from "./auth.ts";
 import { pool } from "./db.ts";
 
 // ---------------------------------------------------------------------------
@@ -78,6 +79,19 @@ interface DecisionBody {
 }
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
+  app.addHook("onRequest", async (req, reply) => {
+    const scope = pathScope(req.method, req.url);
+    if (scope === "public") return;
+    const p = assertScope(req, reply, scope);
+    if (!p) return reply;
+  });
+
+  app.get("/v1/auth/whoami", async (req, reply) => {
+    const p = principalFrom(req);
+    if (!p) return reply.code(401).send({ error: "unauthorized" });
+    return p;
+  });
+
   // --- the write path -------------------------------------------------------
   const writeHandler = async (req: FastifyRequest, reply: FastifyReply) => {
     const traceId =

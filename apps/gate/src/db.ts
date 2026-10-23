@@ -37,7 +37,7 @@ export function executor(client?: PoolClient): Pool {
 
 /** Run migrations (001 base, then 002 PRD alignment) and seed rules. */
 export async function initDb(): Promise<void> {
-  for (const file of ["001_init.sql", "002_prd_alignment.sql"]) {
+  for (const file of ["001_init.sql", "002_prd_alignment.sql", "003_hardening.sql"]) {
     const sql = readFileSync(join(here, "..", "migrations", file), "utf8");
     await pool.query(sql);
   }

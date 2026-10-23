@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { config } from "./config.ts";
-import { executor, pool } from "./db.ts";
+import { appTable, executor, pool } from "./db.ts";
 import { redis } from "./redis.ts";
 
 // ---------------------------------------------------------------------------
@@ -62,6 +62,53 @@ export function decideIdempotency(
 
 function fingerprintOf(table: string, record: unknown): string {
   return `${table}:${contentHash(record)}`;
+}
+
+export interface FuzzyHit {
+  id: string;
+  field: string;
+  score: number;
+}
+
+/**
+ * Review-first near-duplicate against committed application rows (pg_trgm).
+ * Never merges. Null when nothing similar enough is found.
+ */
+export async function findFuzzyDuplicate(
+  table: string,
+  record: Record<string, unknown>,
+): Promise<FuzzyHit | null> {
+  const fields =
+    table === "users"
+      ? [
+          { field: "email", min: config.fuzzyEmailMin },
+          { field: "name", min: config.fuzzyNameMin },
+        ]
+      : table === "orders"
+        ? [{ field: "userId", min: 0.95 }]
+        : [];
+  const rel = appTable(table);
+  for (const { field, min } of fields) {
+    const value = record[field];
+    if (typeof value !== "string" || value.trim().length < 3) continue;
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, similarity(lower(record->>$1), lower($2)) AS score
+           FROM ${rel}
+          WHERE record->>$1 IS NOT NULL
+            AND similarity(lower(record->>$1), lower($2)) >= $3
+          ORDER BY score DESC
+          LIMIT 1`,
+        [field, value, min],
+      );
+      if (rows[0] && Number(rows[0].score) >= min) {
+        return { id: String(rows[0].id), field, score: Number(rows[0].score) };
+      }
+    } catch (err) {
+      console.warn(`[dedup] fuzzy skipped for ${table}.${field}:`, (err as Error).message);
+    }
+  }
+  return null;
 }
 
 /** True when this exact payload was already COMMITTED within the window. */

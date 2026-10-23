@@ -53,9 +53,18 @@ npm run typecheck
 - **n8n unreachable:** write still commits/kicks; outbox retries then gives up after 8 attempts.
 - **Reset local data:** `docker compose down -v` then `docker compose up -d`. Rules reload from YAML on empty `rules_config`.
 
+## Auth
+
+Set `WRITE_API_KEY` and `REVIEW_API_KEY`. In production, keys are required
+(`NODE_ENV=production`). Send `Authorization: Bearer <key>`. Optional
+`x-role: reviewer|operator` and `x-actor` for the audit log.
+
+Console: open `/login`, paste the review key.
+
 ## v1 limits (do not claim otherwise)
 
-- `actor` is a name in the audit log, not authentication.
-- LLM payload redaction is ids-only, not full PII stripping.
-- Outbox delivery is HTTP at-least-once, not BullMQ exactly-once.
+- No OAuth/SSO — API keys and roles only.
+- Outbox is at-least-once (BullMQ + HTTP fallback + DLQ), not exactly-once.
+- LLM stays off until `LLM_ENABLED=true` and a key are set.
 - Only writes that pass through this gate are protected.
+- No automatic rollback of committed rows and no autonomous unattended fixes.

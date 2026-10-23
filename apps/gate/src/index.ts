@@ -1,6 +1,8 @@
+import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { config } from "./config.ts";
 import { initDb } from "./db.ts";
+import { startOutboxWorker, stopOutboxWorker } from "./queue.ts";
 import { isRedisUp, redis } from "./redis.ts";
 import { registerRoutes } from "./routes.ts";
 
@@ -29,21 +31,41 @@ async function main(): Promise<void> {
       "⚠ redis unreachable at boot — continuing on Postgres only: anomaly baseline + alert dedup are degraded, writes are unaffected.",
     );
 
-  const app = Fastify({ logger: true });
+  if (config.authRequired && !config.writeApiKey && !config.reviewApiKey) {
+    console.error("AUTH_REQUIRED is set but WRITE_API_KEY / REVIEW_API_KEY are empty. Exiting.");
+    process.exit(1);
+  }
+
+  const app = Fastify({ logger: true, bodyLimit: config.bodyLimitBytes });
   app.setErrorHandler((err, _req, reply) => {
     const status = (err as { statusCode?: number }).statusCode ?? 500;
     reply.code(status).send({ error: (err as Error).message });
+  });
+  await app.register(cors, {
+    origin: config.corsOrigins,
+    credentials: true,
+    allowedHeaders: [
+      "authorization",
+      "content-type",
+      "x-api-key",
+      "x-role",
+      "x-actor",
+      "x-trace-id",
+    ],
   });
   await registerRoutes(app);
 
   await app.listen({ port: config.port, host: "0.0.0.0" });
   console.log(`⚡ ErrorKicker gate listening on :${config.port}`);
+  console.log(`   auth: ${config.authRequired || config.writeApiKey || config.reviewApiKey ? "ON" : "OFF"}`);
+  console.log(`   body limit: ${config.bodyLimitBytes} bytes`);
   console.log(`   LLM explanations: ${config.llmEnabled ? "ON" : "OFF (rule templates only)"}`);
   console.log(
     config.n8nWebhookUrl
       ? `   n8n outbound: ON (${config.n8nNotifyStatuses.join(", ")})`
       : "   n8n outbound: OFF",
   );
+  await startOutboxWorker();
 }
 
 main().catch((e) => {
@@ -52,6 +74,7 @@ main().catch((e) => {
 });
 
 process.on("SIGTERM", async () => {
+  await stopOutboxWorker().catch(() => undefined);
   await redis.quit().catch(() => undefined);
   process.exit(0);
 });

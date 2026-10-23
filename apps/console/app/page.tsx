@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, severityColor, type Incident, type Metrics, type Pipeline, GATE } from "../lib/api";
+import { getSession } from "../lib/session";
 
 function useLiveData() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -23,7 +24,10 @@ function useLiveData() {
 
   useEffect(() => {
     refresh();
-    const es = new EventSource(`${GATE}/stream`);
+    const token = getSession().token;
+    const es = new EventSource(
+      token ? `${GATE}/stream?access_token=${encodeURIComponent(token)}` : `${GATE}/stream`,
+    );
     es.onmessage = () => refresh();
     es.onerror = () => es.close();
     const t = setInterval(refresh, 10000);

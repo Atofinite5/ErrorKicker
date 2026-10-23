@@ -1,3 +1,5 @@
+import { authHeaders, clearSession, getSession } from "./session";
+
 export const GATE =
   process.env.NEXT_PUBLIC_GATE_URL ?? "http://localhost:3001";
 
@@ -11,15 +13,12 @@ export interface Incident {
   severity: "critical" | "high" | "medium" | "info";
   explanation: string;
   suggested_fix: Record<string, unknown> | null;
-  /** PRD name for the proposed correction — mirrors suggested_fix. */
   proposed_fix: Record<string, unknown> | null;
   fix_source: string | null;
   fix_confidence: number | null;
   state: string;
   created_at: string;
-  /** Durable write operation that produced this incident (may be null for pre-002 rows). */
   operation_id: string | null;
-  /** Optimistic-concurrency version — send it back on every decision. */
   version: number;
   similar?: Array<{ id: string; created_at: string; action: string | null }>;
 }
@@ -45,6 +44,10 @@ export interface Pipeline {
 }
 
 async function j<T>(res: Response): Promise<T> {
+  if (res.status === 401 && typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+    clearSession();
+    window.location.href = "/login";
+  }
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `HTTP ${res.status}`);
@@ -52,45 +55,56 @@ async function j<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+function actor(): string {
+  return getSession().actor || "reviewer";
+}
+
+export async function whoami(): Promise<{ role: string; actor: string }> {
+  return fetch(`${GATE}/v1/auth/whoami`, { headers: authHeaders() }).then((r) =>
+    j<{ role: string; actor: string }>(r),
+  );
+}
+
 export const api = {
   incidents: (state = "open") =>
-    fetch(`${GATE}/incidents?state=${state}&limit=50`).then((r) => j<Incident[]>(r)),
+    fetch(`${GATE}/incidents?state=${state}&limit=50`, { headers: authHeaders() }).then((r) =>
+      j<Incident[]>(r),
+    ),
   incident: (id: string) =>
-    fetch(`${GATE}/incidents/${id}`).then((r) => j<Incident>(r)),
-  approve: (id: string, fix?: Record<string, unknown>, actor = "reviewer", version?: number) =>
+    fetch(`${GATE}/incidents/${id}`, { headers: authHeaders() }).then((r) => j<Incident>(r)),
+  approve: (id: string, fix?: Record<string, unknown>, _actor = actor(), version?: number) =>
     fetch(`${GATE}/incidents/${id}/approve`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ fix, actor, version }),
+      headers: authHeaders(true),
+      body: JSON.stringify({ fix, actor: _actor, version }),
     }).then((r) => j(r)),
-  // PRD /v1 edit-approve: edited record + approve, full revalidation,
-  // version-checked, edits may not add brand-new fields.
-  editApprove: (id: string, fix: Record<string, unknown>, actor = "reviewer", version?: number) =>
+  editApprove: (id: string, fix: Record<string, unknown>, _actor = actor(), version?: number) =>
     fetch(`${GATE}/v1/incidents/${id}/edit-approve`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ fix, actor, version }),
+      headers: authHeaders(true),
+      body: JSON.stringify({ fix, actor: _actor, version }),
     }).then((r) => j(r)),
-  reject: (id: string, actor = "reviewer", version?: number) =>
+  reject: (id: string, _actor = actor(), version?: number) =>
     fetch(`${GATE}/incidents/${id}/reject`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ actor, version }),
+      headers: authHeaders(true),
+      body: JSON.stringify({ actor: _actor, version }),
     }).then((r) => j(r)),
-  abort: (id: string, actor = "reviewer") =>
+  abort: (id: string, _actor = actor()) =>
     fetch(`${GATE}/incidents/${id}/abort`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ actor }),
+      headers: authHeaders(true),
+      body: JSON.stringify({ actor: _actor }),
     }).then((r) => j(r)),
-  resume: (pipelineId: string, actor = "reviewer") =>
+  resume: (pipelineId: string, _actor = actor()) =>
     fetch(`${GATE}/pipelines/${pipelineId}/resume`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ actor }),
+      headers: authHeaders(true),
+      body: JSON.stringify({ actor: _actor }),
     }).then((r) => j(r)),
-  metrics: () => fetch(`${GATE}/metrics`).then((r) => j<Metrics>(r)),
-  pipelines: () => fetch(`${GATE}/pipelines`).then((r) => j<Pipeline[]>(r)),
+  metrics: () => fetch(`${GATE}/metrics`, { headers: authHeaders() }).then((r) => j<Metrics>(r)),
+  pipelines: () =>
+    fetch(`${GATE}/pipelines`, { headers: authHeaders() }).then((r) => j<Pipeline[]>(r)),
 };
 
 export function severityColor(s: string): string {

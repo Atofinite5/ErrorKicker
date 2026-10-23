@@ -1,4 +1,5 @@
 import { config } from "./config.ts";
+import { sendAlertEmail } from "./mail.ts";
 import { redis } from "./redis.ts";
 import type { Severity } from "./rules.ts";
 
@@ -49,15 +50,24 @@ export async function routeAlert(opts: {
         await fetch(config.slackWebhookUrl, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({
+            text,
+            blocks: [
+              {
+                type: "header",
+                text: { type: "plain_text", text: `[${severity.toUpperCase()}] ${title}`.slice(0, 150) },
+              },
+              { type: "section", text: { type: "mrkdwn", text: body.slice(0, 2900) } },
+            ],
+          }),
           signal: AbortSignal.timeout(5000),
         });
       } catch (err) {
         console.error("[alert] slack webhook failed:", (err as Error).message);
       }
     }
-    // Email is intentionally a console line in v1 — wire Resend/SMTP here.
-    if (config.alertEmailTo) console.log(`[alert] email → ${config.alertEmailTo}: ${title}`);
+    if (config.alertEmailTo)
+      await sendAlertEmail(config.alertEmailTo, `[ErrorKicker ${severity}] ${title}`, text);
   }
   return { sent: true, suppressedAsDuplicate: false };
 }

@@ -1,13 +1,22 @@
 import { randomUUID } from "node:crypto";
-import { checkOutlier, findSuspiciousPattern, llmReview, observeBaseline } from "./anomaly.ts";
+import {
+  checkOutlier,
+  findSuspiciousPattern,
+  llmExplain,
+  llmReview,
+  observeBaseline,
+  scoreAnomaly,
+} from "./anomaly.ts";
 import { audit } from "./audit.ts";
 import { routeAlert } from "./alerts.ts";
 import {
+  findFuzzyDuplicate,
   isExactDuplicate,
   recordFingerprint,
   requestHash,
   storeIdempotency,
 } from "./dedup.ts";
+import { config } from "./config.ts";
 import { appTable, pool, withTx } from "./db.ts";
 import { addedFields, suggestFix, type FixSuggestion } from "./fixes.ts";
 import {
@@ -112,7 +121,7 @@ export async function evaluateWrite(input: WriteInput): Promise<Verdict> {
   const schema = tableSchemas[table];
   if (!schema) throw httpError(400, `unknown table: ${table}`);
 
-  const kick = (
+  const kick = async (
     checkFired: string,
     severity: Severity,
     partial: Partial<Parameters<typeof suggestFix>[0]> & {
@@ -120,15 +129,25 @@ export async function evaluateWrite(input: WriteInput): Promise<Verdict> {
       value?: unknown;
       unknownKeys?: string[];
     },
-  ): Verdict => ({
-    kind: "kick",
-    checkFired,
-    severity,
-    fix: suggestFix({ table, record, checkFired, ...partial }),
-    rule: partial.rule ?? null,
-    value: partial.value,
-    unknownKeys: partial.unknownKeys,
-  });
+  ): Promise<Verdict> => {
+    const fix = suggestFix({ table, record, checkFired, ...partial });
+    const polished = await llmExplain({
+      table,
+      checkFired,
+      explanation: fix.explanation,
+      record,
+    });
+    if (polished) fix.explanation = polished;
+    return {
+      kind: "kick",
+      checkFired,
+      severity,
+      fix,
+      rule: partial.rule ?? null,
+      value: partial.value,
+      unknownKeys: partial.unknownKeys,
+    };
+  };
 
   // Stage A — schema + types + unknown fields (Zod, <1ms).
   const parsed = schema.safeParse(record);
@@ -161,7 +180,13 @@ export async function evaluateWrite(input: WriteInput): Promise<Verdict> {
   if (await isExactDuplicate(table, clean))
     return kick("C7_EXACT_DUPLICATE", "medium", {});
 
-  // Stage D — anomaly: statistical outlier, suspicious patterns, LLM review.
+  const fuzzy = await findFuzzyDuplicate(table, clean);
+  if (fuzzy)
+    return kick("C8_FUZZY_DUPLICATE", "medium", {
+      value: `${fuzzy.field} ~ ${fuzzy.id} (${fuzzy.score.toFixed(2)})`,
+    });
+
+  // Stage D — anomaly: statistical outlier, suspicious patterns, score, LLM.
   for (const field of BASELINE_FIELDS[table] ?? []) {
     const v = clean[field];
     if (typeof v === "number") {
@@ -174,6 +199,12 @@ export async function evaluateWrite(input: WriteInput): Promise<Verdict> {
   }
   const suspicious = findSuspiciousPattern(clean);
   if (suspicious) return kick("D11_SUSPICIOUS_PATTERN", "critical", { value: suspicious });
+
+  const scored = await scoreAnomaly(table, clean);
+  if (scored.score >= config.anomalyScoreKick)
+    return kick("D13_ANOMALY_SCORE", "high", {
+      value: `${scored.score}: ${scored.reasons.join("; ") || "composite"}`,
+    });
 
   const review = await llmReview(table, clean);
   if (review && !review.ok)

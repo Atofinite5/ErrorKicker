@@ -1,5 +1,8 @@
 import { config } from "./config.ts";
+import { llmSafeRecord } from "./redact.ts";
 import { redis } from "./redis.ts";
+
+export { llmSafeRecord } from "./redact.ts";
 
 // ---------------------------------------------------------------------------
 // Stage D: anomaly + AI. Runs last — only records that survived the cheap,
@@ -106,20 +109,120 @@ export interface LlmReview {
   reason?: string;
 }
 
+export interface AnomalyReport {
+  score: number;
+  reasons: string[];
+}
+
+function iqrOutlier(vals: number[], value: number): boolean {
+  const s = [...vals].sort((a, b) => a - b);
+  const q = (p: number) => {
+    const i = (s.length - 1) * p;
+    const lo = Math.floor(i);
+    const hi = Math.ceil(i);
+    return lo === hi ? s[lo] : s[lo] * (hi - i) + s[hi] * (i - lo);
+  };
+  const q1 = q(0.25);
+  const q3 = q(0.75);
+  const fence = 1.5 * (q3 - q1);
+  return value < q1 - fence || value > q3 + fence;
+}
+
 /**
- * PRD §15 default (LLM payload policy): when the LLM is enabled, only the
- * record's NON-ID fields are sent — keys named `id` or ending in `Id`/`_id`
- * are stripped. Nothing is sent at all while LLM_ENABLED=false (the v1
- * default). TODO (Pass 2, not implemented): full secret/PII redaction of
- * the remaining fields — do not claim redaction beyond this ID stripping.
+ * Composite 0–100 score. Review-first: a high score kicks, it never auto-fixes.
+ * Redis down → score 0 (skip), same as D10.
  */
-export function llmSafeRecord(record: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(record)) {
-    if (k === "id" || k.endsWith("Id") || k.endsWith("_id")) continue;
-    out[k] = v;
+export async function scoreAnomaly(
+  table: string,
+  record: Record<string, unknown>,
+): Promise<AnomalyReport> {
+  const reasons: string[] = [];
+  let score = 0;
+  try {
+    for (const field of table === "orders" ? ["total"] : table === "users" ? ["age"] : []) {
+      const value = record[field];
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      const key = `base:${table}:${field}`;
+      const raw = await redis.lrange(key, 0, -1);
+      const vals = raw.map(Number).filter((v) => Number.isFinite(v));
+      if (vals.length < config.baselineMinSamples) continue;
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
+      if (sd > 0) {
+        const z = Math.abs((value - mean) / sd);
+        if (z >= 3) {
+          score += Math.min(50, Math.round((z / config.outlierZ) * 40));
+          reasons.push(`${field} |z|=${z.toFixed(2)} vs mean ${mean.toFixed(1)}`);
+        }
+      }
+      if (iqrOutlier(vals, value)) {
+        score += 25;
+        reasons.push(`${field} outside 1.5 IQR fences`);
+      }
+    }
+  } catch {
+    return { score: 0, reasons: [] };
   }
-  return out;
+  if (typeof record.name === "string" && record.name.trim().split(/\s+/).length === 1)
+    score += 10;
+  if (table === "users" && !record.phone && !record.age) {
+    score += 8;
+    reasons.push("user missing phone and age");
+  }
+  return { score: Math.min(100, score), reasons };
+}
+
+/** Optional explanation polish. Never invents a fix; templates stay authoritative. */
+export async function llmExplain(opts: {
+  table: string;
+  checkFired: string;
+  explanation: string;
+  record: Record<string, unknown>;
+}): Promise<string | null> {
+  if (!config.llmEnabled || !config.openaiApiKey) return null;
+  try {
+    const res = await fetch(`${config.openaiBaseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.openaiApiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.llmModel,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              'Rewrite the gate explanation in one or two plain sentences. Reply JSON {"explanation": string}. Do not propose extra fields. Do not invent facts.',
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              table: opts.table,
+              check: opts.checkFired,
+              explanation: opts.explanation,
+              record: llmSafeRecord(opts.record),
+            }),
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const parsed = JSON.parse(body.choices?.[0]?.message?.content ?? "{}") as {
+      explanation?: unknown;
+    };
+    return typeof parsed.explanation === "string" && parsed.explanation.trim()
+      ? parsed.explanation.trim()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

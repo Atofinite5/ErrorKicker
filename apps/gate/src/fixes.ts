@@ -171,6 +171,14 @@ export function suggestFix(opts: {
     return none(
       "This record is byte-identical to one submitted moments ago — a double-submit. Safe to reject; nothing is lost.",
     );
+  if (checkFired === "C8_FUZZY_DUPLICATE")
+    return none(
+      `A committed record looks similar (${String(value)}). Review-first: do not merge automatically. Reject if it is a duplicate, or edit if it is a real new row.`,
+    );
+  if (checkFired === "D13_ANOMALY_SCORE")
+    return none(
+      `Composite anomaly score is high (${String(value)}). Review the values against recent traffic. This is not an automatic block of a known schema error.`,
+    );
   if (checkFired === "D11_SUSPICIOUS_PATTERN")
     return none(
       "A text field matches a known injection / script pattern. Do not auto-fix — reject the record and check the source form.",

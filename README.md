@@ -91,6 +91,7 @@ Valid write:
 ```bash
 curl -sS -X POST http://localhost:3001/v1/writes \
   -H 'content-type: application/json' \
+  -H "Authorization: Bearer $WRITE_API_KEY" \
   -d '{"table":"users","record":{"id":"u_1","name":"Ada","email":"ada@example.com","signupAt":"2026-10-23T00:00:00.000Z"},"idempotencyKey":"write-1"}'
 ```
 
@@ -135,7 +136,9 @@ Full contract: [docs/api.md](docs/api.md).
 | GET | `/health` | Postgres health |
 | GET | `/v1/stream` | SSE for the dashboard |
 
-v1 has no authentication. `actor` is recorded in the audit log only.
+Auth: `WRITE_API_KEY` / `REVIEW_API_KEY` as `Authorization: Bearer`. Roles:
+`reviewer` (approve/reject) and `operator` (plus pause/resume/abort). Console
+login is `/login`. `actor` is still the audit display name (`x-actor`).
 
 ## Configuration
 
@@ -172,6 +175,6 @@ docker-compose.yml
 
 - Protection applies only to writes sent to this gate.
 - Redis/LLM outage must not produce a false commit (it does not).
-- Outbox delivery is at-least-once HTTP, not exactly-once.
+- Outbox is at-least-once (BullMQ, HTTP fallback, DLQ), not exactly-once.
 - Abort never rolls back committed rows.
-- LLM redaction strips id-like keys only.
+- No OAuth/SSO, no multi-tenant billing, no autonomous unattended fixes.

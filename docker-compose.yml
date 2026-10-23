@@ -28,6 +28,33 @@ services:
       timeout: 3s
       retries: 10
 
+  gate:
+    build:
+      context: .
+      dockerfile: apps/gate/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://kicker:kicker@postgres:5432/errorkicker
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  console:
+    build:
+      context: .
+      dockerfile: apps/console/Dockerfile
+    environment:
+      NEXT_PUBLIC_GATE_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gate
+
 volumes:
   pgdata:
   redisdata:

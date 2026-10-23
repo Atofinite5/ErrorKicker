@@ -44,6 +44,20 @@ export const config = {
 
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? "",
   alertEmailTo: process.env.ALERT_EMAIL_TO ?? "",
+  alertEmailFrom: process.env.ALERT_EMAIL_FROM ?? "ErrorKicker <alerts@localhost>",
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
+  smtpHost: process.env.SMTP_HOST ?? "",
+  smtpPort: Number(process.env.SMTP_PORT ?? 587),
+  smtpUser: process.env.SMTP_USER ?? "",
+  smtpPass: process.env.SMTP_PASS ?? "",
+
+  writeApiKey: process.env.WRITE_API_KEY ?? "",
+  reviewApiKey: process.env.REVIEW_API_KEY ?? "",
+  authRequired:
+    process.env.AUTH_REQUIRED === "true" ||
+    (process.env.NODE_ENV === "production" && process.env.AUTH_REQUIRED !== "false"),
+
+  bodyLimitBytes: Number(process.env.BODY_LIMIT_BYTES ?? 256 * 1024),
 
   // Optional outbound sink. n8n Cloud cannot reach localhost, so the gate
   // POSTs out. Empty = no network call; outbox rows are still marked done.
@@ -56,5 +70,12 @@ export const config = {
   baselineSamples: 200, // rolling window for anomaly detection
   baselineMinSamples: 20, // need this many before outlier checks fire
   outlierZ: 4, // |z| above this kicks D10
+  fuzzyEmailMin: Number(process.env.FUZZY_EMAIL_MIN ?? 0.55),
+  fuzzyNameMin: Number(process.env.FUZZY_NAME_MIN ?? 0.7),
+  anomalyScoreKick: Number(process.env.ANOMALY_SCORE_KICK ?? 85),
   alertDedupTtlSec: 15 * 60, // one alert per fingerprint per 15 min
+  corsOrigins: (process.env.CORS_ORIGINS ?? "http://localhost:3000")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 };
